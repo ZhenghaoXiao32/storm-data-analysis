@@ -1,0 +1,250 @@
+---
+title: "Storm Data Analysis"
+output: html_document
+---
+
+By Zhenghao Xiao
+
+```{r setup, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Synopsis
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern. 
+
+The analysis is based on U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. As a result, among all the severe weather types, Tornado and Spout contributed to most human injuries and fatalities while Wind and Storm caused the greatest economic damages followed by Flood and Surf.
+
+## Data Processing
+
+```{r, message = FALSE}
+setwd("/Users/zhenghaoxiao/Documents/R/jhu/RR_project2/")
+library(tidyverse)
+library(grid)
+library(gridExtra)
+library(scales)
+```
+
+### Download Data
+
+```{r}
+download_data <- function(){      
+      file_name <<- "repdata-data-StormData.csv.bz2"
+      if (!file.exists(file_name)) {
+            file_url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+            download.file(file_url, file_name, method = "curl")
+      }
+}
+
+download_data()
+```
+
+### Load Data
+
+```{r, message = FALSE, warning = FALSE, results = FALSE}
+storm <- read_csv(file_name)
+```
+
+### Have a look of the data
+
+```{r}
+glimpse(storm)
+```
+
+### Delete unnecessary columns
+
+Keep only those columns that will be used in this analysis.
+```{r}
+col_names <- c("EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP")
+df <- storm[, col_names]
+```
+
+Have a look of the chosen columns:
+
+```{r}
+head(df)
+```
+
+```{r}
+table(df$PROPDMGEXP)
+```
+
+
+
+### Label the event type data
+
+The EVTYPE variable has nearly 1000 different types, we need to relabel them for a better visualization.
+
+```{r}
+df <- df %>%
+      mutate(dmg_type = case_when(str_detect(EVTYPE, 
+                                             regex("precipitation|rain|hail|drizzle|wet|percip|burst|depression|fog|wall cloud", 
+                                                   ignore_case = TRUE)) ~ "precipitation", 
+                                  str_detect(EVTYPE, 
+                                             regex("wind|storm|wnd|hurricane|typhoon", 
+                                                   ignore_case = TRUE)) ~ "Wind & Storm",
+                                  str_detect(EVTYPE, 
+                                             regex("slide|erosion|slump", 
+                                                   ignore_case = TRUE)) ~ "Slide & Erosion",
+                                  str_detect(EVTYPE, 
+                                             regex("warmth|warm|heat|dry|hot|drought|thermia|temperature record|record temperature|record high", 
+                                                   ignore_case = TRUE)) ~ "Heat & Thermia",
+                                  str_detect(EVTYPE,
+                                             regex("cold|cool|ice|icy|frost|freeze|snow|winter|wintry|wintery|blizzard|chill|freezing|avalanche|glaze|sleet", 
+                                                   ignore_case = TRUE)) ~ "Snow & Ice",
+                                  str_detect(EVTYPE, 
+                                             regex("flood|surf|blow-out|swells|fld|dam break", 
+                                                   ignore_case = TRUE)) ~ "Flood & Surf",
+                                  str_detect(EVTYPE, 
+                                             regex("seas|high water|tide|tsunami|wave|current|marine|drowning", 
+                                                   ignore_case = TRUE)) ~ "Tide & Wave",
+                                  str_detect(EVTYPE, 
+                                             regex("dust|saharan", 
+                                                   ignore_case = TRUE)) ~ "Dust & Saharan",
+                                  str_detect(EVTYPE, 
+                                             regex("tstm|thunderstorm|lightning", 
+                                                   ignore_case = TRUE)) ~ "Lighting & Thunder",
+                                  str_detect(EVTYPE, 
+                                             regex("tornado|spout|funnel|whirlwind", 
+                                                   ignore_case = TRUE)) ~ "Tornado & Spout",
+                                  str_detect(EVTYPE, 
+                                             regex("fire|smoke|volcanic", 
+                                                   ignore_case = TRUE)) ~ "Fire & Volcanic"))
+
+df <- df[complete.cases(df[, "dmg_type"]), ]
+df$dmg_type <- as.factor(df$dmg_type)
+```
+
+The PROPDMG column has to be combined with PROPDMGEXP column to get the real value of the property damage.
+
+```{r}
+df$pwr <- df$PROPDMGEXP
+df <- df %>% 
+      mutate(pwr = case_when(str_detect(PROPDMGEXP, fixed("h", ignore_case = TRUE)) ~ 2,
+                             str_detect(PROPDMGEXP, fixed("k", ignore_case = TRUE)) ~ 3,
+                             str_detect(PROPDMGEXP, fixed("m", ignore_case = TRUE)) ~ 6,
+                             str_detect(PROPDMGEXP, fixed("b", ignore_case = TRUE)) ~ 9,
+                             str_detect(PROPDMGEXP, regex("[:punct:]")) ~ 0,
+                             PROPDMGEXP == "+" ~ 0,
+                             is.na(PROPDMGEXP) ~ 0,
+                             TRUE ~ as.numeric(PROPDMGEXP)))
+
+df$real_propdmg <- df$PROPDMG * (10^df$pwr)
+```
+
+
+Save the cleaned data:
+
+```{r}
+df_clean <- df %>%
+      select(dmg_type, FATALITIES, INJURIES, real_propdmg)
+```
+
+```{r}
+head(df_clean)
+```
+
+### Aggregate data for visualization
+
+Aggregate the human damage data:
+
+```{r}
+sum_human_dmg <- df_clean %>%
+      select(FATALITIES, INJURIES, dmg_type) %>%
+      group_by(dmg_type) %>%
+      summarize(sum_fatality = sum(FATALITIES), sum_injury = sum(INJURIES)) %>%
+      arrange(desc(sum_injury))
+
+
+max_injury <- round(max(sum_human_dmg$sum_injury) * 1.25)
+max_fatality <- round(max(sum_human_dmg$sum_fatality) * 1.25)
+```
+
+```{r}
+sum_human_dmg
+```
+
+Aggregate the property damage data:
+
+```{r}
+sum_prop_dmg <- df_clean %>%
+      select(real_propdmg, dmg_type) %>%
+      group_by(dmg_type) %>%
+      summarize(sum_propdmg = sum(real_propdmg)) %>%
+      arrange(desc(sum_propdmg))
+
+sum_prop_dmg
+```
+
+## Results
+
+### Injuries and Fatalities
+
+This plot shows the count of injuries and fatalities of different type ofs storm or severe weathers:
+
+```{r}
+# Event type names
+g.event <- ggplot(sum_human_dmg, aes(x = 1, y = reorder(dmg_type, sum_injury))) +
+      geom_text(aes(label = dmg_type), size = 4) +
+      ggtitle("") +
+      ylab(NULL) + 
+      scale_x_continuous(expand = c(0, 0), limits = c(0.94, 1.065)) + 
+      theme(axis.title = element_blank(),
+            panel.grid = element_blank(),
+            axis.text.y = element_blank(),
+            axis.ticks.y = element_blank(),
+            panel.background = element_blank(),
+            axis.text.x = element_text(color = NA),
+            axis.ticks.x = element_line(color = NA),
+            plot.margin = unit(c(1, -1, 1, -1), "mm"))
+```
+
+```{r}
+# Bar plot for injuries
+g.injury <- ggplot(sum_human_dmg, aes(reorder(dmg_type, sum_injury), sum_injury)) +
+      geom_bar(stat = "identity") +
+      geom_text(aes(label = sum_injury), size = 3, vjust = 0.5, hjust = 1.5) +
+      ggtitle("Total Injuries by Event Type") + 
+      scale_y_reverse(expand = c(0, 0), limits = c(max_injury, 0)) + 
+      coord_flip() + 
+      theme(axis.title.x = element_blank(),
+            axis.title.y = element_blank(),
+            axis.text.y = element_blank(),
+            axis.ticks.y = element_blank(),
+            plot.margin = unit(c(1, -1, 1, 0), "mm"))
+```
+
+```{r}
+# Bar plot for Fatalities
+g.fatality <- ggplot(sum_human_dmg, aes(reorder(dmg_type, sum_injury), sum_fatality)) + 
+      geom_bar(stat = "identity") +
+      geom_text(aes(label = sum_fatality), size = 3, vjust = 0.5, hjust = -0.5) +
+      ggtitle("Total Fatalities by Event Type") + 
+      scale_y_continuous(expand = c(0, 0), limits = c(0, max_fatality)) + 
+      coord_flip() + 
+      theme(axis.title.x = element_blank(),
+            axis.title.y = element_blank(),
+            axis.text.y = element_blank(),
+            axis.ticks.y = element_blank(),
+            plot.margin = unit(c(1, -1, 1, 0), "mm"))
+```
+
+```{r}
+gg.event <- ggplot_gtable(ggplot_build(g.event))
+gg.injury <- ggplot_gtable(ggplot_build(g.injury))
+gg.fatality <- ggplot_gtable(ggplot_build(g.fatality))
+
+grid.arrange(grobs = list(gg.injury, gg.event, gg.fatality),
+             ncol = 3, widths = c(0.4, 0.2, 0.4))
+```
+
+### Property Damages
+
+This plot shows the property damage of all the event types:
+
+```{r}
+ggplot(sum_prop_dmg, aes(x = reorder(dmg_type, -sum_propdmg), y = sum_propdmg)) + 
+      geom_bar(stat = "identity") + 
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+      labs(x = "Event Type", y = "Total Property Damage", title = "Property Damage by Event Type") 
+```
+
